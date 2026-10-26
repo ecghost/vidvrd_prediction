@@ -1,0 +1,5 @@
+DATASET_ROOT="${DATASET_ROOT:-$(cd ../../.. && pwd)/dataset/vidvrd}"
+TEXT_MODEL_WEIGHTS="${TEXT_MODEL_WEIGHTS:-$HOME/.cache/clip/ViT-L-14-336px.pt}"
+DEVICE="${DEVICE:-cuda:0}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2}"
+CHECKPOINT="${CHECKPOINT:-$PWD/output/train/epoch_40.pth}"
