@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import pickle
 import tempfile
 import unittest
@@ -108,22 +109,22 @@ class StreamingTests(unittest.TestCase):
         stream.reset()
         self.assertFalse(stream.caches or stream.last_end or stream.clocks or stream.association.active)
 
-    def test_association_hysteresis_parallel_reopen_gap_flush_format(self):
-        assoc = OnlineAssociation(['a', 'b'], .6, .4)
-        first = assoc.step('v', 'p', [.8, .7], metadata(0, 30), 30)
+    def test_association_topk_parallel_reopen_gap_flush_format(self):
+        assoc = OnlineAssociation(['a', 'b', 'c'], clip_top_n=2)
+        first = assoc.step('v', 'p', [.8, .7, .01], metadata(0, 30), 30)
         self.assertEqual([item['event'] for item in first], ['start', 'start'])
-        second = assoc.step('v', 'p', [.5, .1], metadata(30, 60), 60)
-        self.assertEqual([item['event'] for item in second], ['update', 'end'])
+        second = assoc.step('v', 'p', [.5, .1, .2], metadata(30, 60), 60)
+        self.assertEqual([item['event'] for item in second], ['update', 'end', 'start'])
         self.assertEqual(second[1]['end_fid'], 30)
         self.assertEqual(second[1]['emitted_at_fid'], 60)
         self.assertEqual(first[0]['end_fid'], 30)
-        third = assoc.step('v', 'p', [.1, .8], metadata(60, 90), 90)
-        self.assertEqual([item['event'] for item in third], ['end', 'start'])
-        gap = assoc.step('v', 'p', [.9, .8], metadata(120, 150), 150)
-        self.assertEqual([item['event'] for item in gap], ['start', 'end', 'start'])
+        third = assoc.step('v', 'p', [.1, .8, .2], metadata(60, 90), 90)
+        self.assertEqual([item['event'] for item in third], ['end', 'start', 'update'])
+        gap = assoc.step('v', 'p', [.9, .8, .1], metadata(120, 150), 150)
+        self.assertEqual([item['event'] for item in gap], ['start', 'end', 'start', 'end'])
         assoc.flush('v', 160)
         final = assoc.final('v')
-        self.assertEqual(len(final), 5)
+        self.assertEqual(len(final), 6)
         for item in final:
             self.assertEqual(len(item['sub_traj']), item['duration'][1] - item['duration'][0])
             self.assertEqual(len(item['obj_traj']), len(item['sub_traj']))
@@ -137,7 +138,7 @@ class StreamingTests(unittest.TestCase):
         net = model()
         data = features(6)
         def replay(count):
-            engine = StreamPredictor(net, 0., 0.)
+            engine = StreamPredictor(net)
             outputs = []
             for index in range(count):
                 begin = index * 30 + (30 if index >= 3 else 0)
@@ -246,13 +247,58 @@ class StreamingTests(unittest.TestCase):
             engine.stream_step('v', 'p', data, meta)
         self.assertFalse(engine.caches)
 
-    def test_split_excludes_predicates_even_at_zero_threshold(self):
+    def test_split_excludes_predicates_from_topk(self):
         net = model()
         net.tgt_split = 'base'
-        engine = StreamPredictor(net, 0., 0.)
+        engine = StreamPredictor(net)
         data = {key: value[0, 0] for key, value in features(1).items()}
         result = engine.stream_step('v', 'p', data, metadata(0, 30))
         self.assertEqual([event['predicate_id'] for event in result['events']], [0, 2])
+
+    def test_topk_selects_low_scores_and_default_twenty(self):
+        assoc = OnlineAssociation([str(index) for index in range(25)])
+        events = assoc.step('v', 'p', [index * .0001 for index in range(25)], metadata(0, 30), 30)
+        self.assertEqual({event['predicate_id'] for event in events}, set(range(5, 25)))
+        assoc = OnlineAssociation(['a', 'b'], clip_top_n=1)
+        assoc.step('v', 'p', [.0002, .0001], metadata(0, 30), 30)
+        events = assoc.step('v', 'p', [.9, .95], metadata(30, 60), 60)
+        self.assertEqual([event['event'] for event in events], ['end', 'start'])
+        self.assertEqual(events[0]['end_fid'], 30)
+        with self.assertRaises(ValueError):
+            OnlineAssociation(['a'], clip_top_n=0)
+
+    def test_matches_original_offline_topk_association(self):
+        source = Path(__file__).resolve().parents[2] / 'VidVRD_predication/utils/post_process.py'
+        if not source.is_file():
+            self.skipTest('optional original project is not present')
+        spec = importlib.util.spec_from_file_location('original_post_process', source)
+        original = importlib.util.module_from_spec(spec)
+        import sys
+        previous = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec.loader.exec_module(original)
+        finally:
+            sys.dont_write_bytecode = previous
+        from types import SimpleNamespace
+        args = SimpleNamespace(clip_len=30, clip_top_n=2, use_prior=False, max_per_video=200)
+        scores = torch.tensor([[.03, .02, .01], [.02, .01, .03], [.01, .03, .02], [.03, .02, .01]])
+        meta = metadata(0, 120)
+        meta['duration'] = [0, 120]
+        names = ['a', 'b', 'c']
+        expected = original.format_(args, original.association(original.process_pred(args, names, {}, None, scores, meta)))
+        online = OnlineAssociation(names, clip_top_n=2)
+        for index, current in enumerate(scores):
+            online.step('v', 'p', current.tolist(), metadata(index * 30, (index + 1) * 30), (index + 1) * 30)
+        online.flush('v', 120)
+        actual = online.final('v')
+        order = lambda item: (item['triplet'], item['duration'])
+        expected, actual = sorted(expected, key=order), sorted(actual, key=order)
+        self.assertEqual(len(expected), len(actual))
+        for reference, result in zip(expected, actual):
+            for key in ('triplet', 'duration', 'sub_traj', 'obj_traj'):
+                self.assertEqual(reference[key], result[key])
+            self.assertAlmostEqual(reference['score'], result['score'])
 
 
 if __name__ == '__main__':

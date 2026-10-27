@@ -7,7 +7,7 @@
    encoding, window-local positions, current-only supervision and valid object means.
 3. Index training windows without copying overlapping arrays. Replay test segments
    by completion time, expose stream_step, cache only spatial representations.
-4. Implement independent predicate hysteresis, gap reset, explicit flush and immutable
+4. Implement independent predicate top-N membership association, gap reset, explicit flush and immutable
    event snapshots. Reuse original evaluator only, never offline association.
 5. Validate synthetic causal/padding/cache/gradient/association/prefix contracts,
    then document paths, commands, limitations and real-data verification status.

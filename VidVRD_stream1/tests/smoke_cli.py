@@ -37,7 +37,7 @@ def main():
                   '--obj_class_split', str(root / 'split.json'), '--output_dir', str(root / 'output'),
                   '--annotation', str(root / 'gt.json'),
                   '--device', 'cpu', '--src_split', 'all', '--window_size', '2',
-                  '--on_threshold', '0', '--off_threshold', '0']
+                  '--clip_top_n', '20']
         env = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', PYTHONDONTWRITEBYTECODE='1')
         subprocess.run([sys.executable, 'train_stage1.py', *common, '--text_vectors', str(root / 'text.pt'),
                         '--batch_size', '2', '--max_steps', '1', '--num_epochs', '1'], cwd=project, env=env, check=True)

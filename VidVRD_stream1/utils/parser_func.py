@@ -15,8 +15,8 @@ def parse_args(argv=None):
     parser.add_argument('--num_epochs', type=int, default=40)
     parser.add_argument('--src_split', choices=['base', 'novel', 'all'], default='base')
     parser.add_argument('--tgt_split', choices=['base', 'novel', 'all'], default='all')
-    parser.add_argument('--on_threshold', type=float, default=0.5)
-    parser.add_argument('--off_threshold', type=float, default=0.3)
+    parser.add_argument('--clip_top_n', type=int, default=20,
+                        help='top predicates per completed pair segment; no score threshold')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--seed', type=int, default=3407)
     parser.add_argument('--obj_loss_weight', type=float, default=0.2)
@@ -28,8 +28,8 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if not 1 <= args.window_size <= 40 or args.clip_len <= 0 or args.batch_size <= 0:
         parser.error('window_size must be 1..40, clip_len and batch_size positive')
-    if not 0 <= args.off_threshold <= args.on_threshold <= 1:
-        parser.error('require 0 <= off_threshold <= on_threshold <= 1')
+    if args.clip_top_n < 1:
+        parser.error('clip_top_n must be positive')
     if args.num_epochs < 1 or args.learning_rate <= 0 or min(args.limit_pairs, args.max_steps, args.max_per_video) < 0:
         parser.error('epochs and learning_rate must be positive; limits must be nonnegative')
     if args.prior:

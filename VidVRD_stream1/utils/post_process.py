@@ -1,13 +1,15 @@
 from copy import deepcopy
 
+import numpy as np
+
 
 class OnlineAssociation:
-    def __init__(self, predicates, on_threshold=0.5, off_threshold=0.3, predicate_ids=None):
-        if not 0 <= off_threshold <= on_threshold <= 1:
-            raise ValueError('require 0 <= off_threshold <= on_threshold <= 1')
+    def __init__(self, predicates, clip_top_n=20, predicate_ids=None):
+        if not isinstance(clip_top_n, int) or clip_top_n < 1:
+            raise ValueError('clip_top_n must be a positive integer')
         self.predicates = predicates
         self.predicate_ids = set(range(len(predicates)) if predicate_ids is None else predicate_ids)
-        self.on, self.off = on_threshold, off_threshold
+        self.clip_top_n = clip_top_n
         self.active, self.finished = {}, {}
 
     def reset(self, video_id=None):
@@ -45,6 +47,11 @@ class OnlineAssociation:
             raise ValueError('invalid segment release time')
         if len(meta['sbj_traj']) != end - begin or len(meta['obj_traj']) != end - begin:
             raise ValueError('trajectory length must match half-open duration')
+        scores = np.asarray(scores, dtype=np.float32)
+        if scores.shape != (len(self.predicates),) or not np.isfinite(scores).all():
+            raise ValueError('scores must be a finite vector matching predicate count')
+        eligible = np.array(sorted(self.predicate_ids), dtype=np.int64)
+        selected = set(eligible[np.argsort(-scores[eligible])[:self.clip_top_n]].tolist())
         events = []
         for predicate, score in enumerate(scores):
             if predicate not in self.predicate_ids:
@@ -55,9 +62,9 @@ class OnlineAssociation:
             if state and state['duration'][1] != begin:
                 events.append(self.close(key, clock))
                 state = None
-            if state and score < self.off:
+            if state and predicate not in selected:
                 events.append(self.close(key, clock))
-            elif score >= (self.off if state else self.on):
+            elif predicate in selected:
                 kind = 'update' if state else 'start'
                 if state is None:
                     state = dict(triplet=[meta['sbj_cls'], self.predicates[predicate], meta['obj_cls']],

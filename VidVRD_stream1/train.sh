@@ -10,4 +10,4 @@ fi
 python train_stage1.py --dataset_root "$DATASET_ROOT" "${text_args[@]}" \
   --output_dir output/train --window_size 4 --clip_len 30 --batch_size 32 \
   --learning_rate 1e-4 --num_epochs 40 --obj_loss_weight 0.2 --int_loss_weight 0.1 \
-  --src_split base --tgt_split all --seed 3407 --device "$DEVICE" "$@"
+  --src_split base --tgt_split all --clip_top_n 30 --seed 3407 --device "$DEVICE" "$@"

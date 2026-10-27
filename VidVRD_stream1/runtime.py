@@ -37,7 +37,7 @@ def make_model(args):
 
 
 def replay(model, args, output_name='predictions'):
-    predictor = StreamPredictor(model, args.on_threshold, args.off_threshold)
+    predictor = StreamPredictor(model, args.clip_top_n)
     predictions = {}
     with open(args.output_dir / f'{output_name}.events.jsonl', 'w') as events_file, \
             open(args.output_dir / f'{output_name}.segments.jsonl', 'w') as segments_file:

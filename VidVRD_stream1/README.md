@@ -17,7 +17,7 @@
 - `mot_feat` 是首/中/尾框几何编码之差，不是光流。
 - 旧 PredCls 使用缓存给定物体类别和 `sbj_scr/obj_scr`，不是模型物体分类输出。
 - 原关联向后搜索完整序列，新实现不调用它。仅复制原评估器，移除机器专属默认路径，
-  并处理阈值过滤后空预测的 recall 边界，正常非空情况不改指标定义。
+  并处理空预测的 recall 边界，正常非空情况不改指标定义。
 - 已核实生成器命名为 `<完整video_id>_<6位pair_id>.pkl`，用正则解析后缀，
   不截断 video_id。测试缓存没有真实跨 pair track ID，因此用稳定有序 pair_id，
   不按类别推断身份，也不跨 pair 合并。
@@ -52,7 +52,7 @@ $DATASET_ROOT/
 所有新输出通过 `--output_dir` 指定，**必须在本项目内**（会检查 resolve 后的路径）。
 同名运行会重写同名输出，请为不同实验使用不同目录。
 配置包括 clip_len/window_size/batch_size/learning_rate/num_epochs/src_split/tgt_split、
-on/off_threshold、device、seed、损失权重等，详见 `python train_stage1.py --help`。
+clip_top_n、device、seed、损失权重等，详见 `python train_stage1.py --help`。
 
 ### 固定文本向量（优先推荐，无需加载任何预训练模型）
 
@@ -173,7 +173,7 @@ bash infer.sh
 python train_stage1.py --dataset_root "$DATASET_ROOT" --text_vectors "$TEXT_VECTORS" \
   --output_dir output/experiment1 --clip_len 30 --window_size 4 \
   --batch_size 8 --learning_rate 1e-4 --num_epochs 1 --src_split base --tgt_split all \
-  --on_threshold 0.5 --off_threshold 0.3 --device cpu --seed 3407
+  --clip_top_n 20 --device cpu --seed 3407
 ```
 
 训练每轮保存 checkpoint，再调用和独立推理完全相同的 `runtime.replay`、
@@ -205,9 +205,13 @@ EOF 是明确的流结束信号，不宣称从缓存知道原始视频真实结�
 
 每个 `(video,pair,predicate)` 独立维护状态，多关系可同时激活：
 
-- inactive 且 score>=on_threshold 开启；active 且 score>=off_threshold 延续。
-- active 且 score<off_threshold 关闭，不把低分当前片段并入旧关系。
-- on>=off；默认 0.5/0.3 仅为可配置初值，未验证为最优，不引入 gap tolerance。
+- 与原项目一致，每个轨迹对、每个已完成片段按关系分数排序，取 top-20。
+  用 `--clip_top_n` 调整；候选少于 N 时保留全部。不设置最低分数阈值。
+- 未激活且进入当前 top-N：开启；已激活且仍在 top-N：延续。
+- 已激活但退出当前 top-N：关闭，不把退出候选集的当前片段并入旧关系。
+- 排名只使用当前完成片段的分数；只在目标 split 的有效 predicate 中排序，
+  不让 split 外零分占位类别进入候选。排序采用与原项目相同的 NumPy argsort。
+  不引入 gap tolerance，也不恢复离线未来遍历。
 - 关闭后再出现是新实例；flush 关闭所有剩余关系。
 - predicate_score 是已纳入片段关系分数的算术均值（短尾与完整片段等权）。
 - triplet score = 开启时给定 sbj_scr × obj_scr × predicate_score，保持原 PredCls 约定。
@@ -224,6 +228,13 @@ EOF 是明确的流结束信号，不宣称从缓存知道原始视频真实结�
 全视频 top-K 只在 EOF 后对最终结果排序，绝不参与在线开启/维持判断。
 关闭事件 emitted_at_fid 允许晚于关系 end_fid。在线事件不是最终排序列表。
 
+本版本已移除旧 `--on_threshold/--off_threshold` 参数；旧命令需改成 `--clip_top_n 20`。
+不改模型结构、训练损失或 checkpoint 参数，可直接用已有 checkpoint 重新推理，
+无需仅为更换后处理而重新训练。旧 checkpoint config 中记录的阈值不再参与推理。
+重新评估建议指定新的 output_dir，保留原阈值策略的结果用于对照。
+训练中的验证与独立推理均使用本 top-N 逻辑；已经运行中的 Python 训练进程需重启
+才能采用更新后的代码，修改文件不会动态替换其已加载模块。
+
 ## 6. 测试与已验证范围
 
 ```bash
@@ -236,7 +247,10 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python tests/smoke_cli.py
 空间调用次数、状态隔离/reset、断档、开启/延续/关闭/再开启/多关系/flush、
 事件时钟、有限 loss/梯度、负样本窗口索引、真实 filename 规则、短尾、评估轨迹格式、
 checkpoint 报告与 Stage 2 拒绝、prefix consistency（不包含人为前缀 EOF flush）。
-另测试非法 metadata 不污染缓存、零阈值不激活 split 外类别、空预测评估和原损失 reduction。
+另测试非法 metadata 不污染缓存、top-N 不包含 split 外类别、低分仍入选、
+高分但排名落选会关闭、空预测评估和原损失 reduction。
+存在同级原项目时，还直接对照其 process_pred/association/format_：连续片段的最终
+关系范围、轨迹及分数一致；无同级原项目时仅跳过此可选对照测试。
 
 CLI smoke 在本项目临时目录生成 768 维合成缓存和随机测试文本，执行 **一个训练 step**、
 自动流式验证、保存/重载 checkpoint、独立推理和 JSON 导出，再清理自己创建的临时目录。

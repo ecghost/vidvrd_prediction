@@ -6,10 +6,10 @@ from utils.post_process import OnlineAssociation
 
 
 class StreamPredictor:
-    def __init__(self, model, on_threshold=0.5, off_threshold=0.3):
+    def __init__(self, model, clip_top_n=30):
         self.model = model.eval()
         names = [model.pred_split['id2cls'][str(index)] for index in range(len(model.pred_split['id2cls']))]
-        self.association = OnlineAssociation(names, on_threshold, off_threshold,
+        self.association = OnlineAssociation(names, clip_top_n,
                                              model.ids(model.pred_split, model.tgt_split))
         self.caches, self.last_end, self.clocks = {}, {}, {}
 
